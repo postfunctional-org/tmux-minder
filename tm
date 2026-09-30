@@ -23,6 +23,7 @@ fields=(
     '#{session_attached}'       # 5
     '#{pane_current_command}'   # 6
     '#{?@daemon,1,0}'           # 7
+    '#{session_id}'             # 8
 )
 
 get_sort() {
@@ -47,12 +48,14 @@ header() {
 }
 
 # Id of the Daemons heading row. It must not be empty: --track never finds
-# an empty id after a reload, and fzf then stops taking keys. tmux does not
-# allow ':' in session names, so this id cannot match a real session.
+# an empty id after a reload, and fzf then stops taking keys. Session ids
+# look like $3, so this cannot match one.
 heading=':daemons:'
 
-# Output: <id> TAB <padded name> TAB <details>. The id is the session name
-# the bindings target. fzf shows fields 2.. and only searches field 2.
+# Output: <id> TAB <padded name> TAB <details>. The id is the tmux session
+# id, which the bindings target. It survives a rename, and it works as a
+# target when the name has . or : in it, which a name target does not.
+# fzf shows fields 2.. and only searches field 2.
 list() {
     local key
     case "$(get_sort)" in
@@ -72,7 +75,7 @@ list() {
         }
         {
             line = sprintf("%s\t%-24.24s\t%2dw  %-12.12s idle %-4s up %-4s %s",
-                $1, $1, $4, $6, ago($2), ago($3), ($5 > 0 ? "\033[32mattached\033[0m" : ""))
+                $8, $1, $4, $6, ago($2), ago($3), ($5 > 0 ? "\033[32mattached\033[0m" : ""))
             if ($7) daemons[++nd] = line; else print line
         }
         END {
@@ -81,14 +84,12 @@ list() {
         }'
 }
 
-# Option commands need the trailing colon in =name: here. A bare =name is
-# rejected with "no such session".
 toggle_daemon() {
     [[ -z "$1" || "$1" == "$heading" ]] && return
-    if [[ -n "$(tmux show-options -t "=$1:" -qv @daemon)" ]]; then
-        tmux set-option -t "=$1:" -u @daemon
+    if [[ -n "$(tmux show-options -t "$1" -qv @daemon)" ]]; then
+        tmux set-option -t "$1" -u @daemon
     else
-        tmux set-option -t "=$1:" @daemon 1
+        tmux set-option -t "$1" @daemon 1
     fi
 }
 
@@ -126,23 +127,23 @@ pick=$(list | fzf \
     --no-input --disabled --prompt='search> ' \
     --header="$(header)" --header-first \
     --layout=reverse --border \
-    --preview="$is_session && tmux capture-pane -ep -t ={1}:" \
+    --preview="$is_session && tmux capture-pane -ep -t {1}" \
     --preview-window='right,55%' \
     --bind='j:down,k:up' \
     --bind="d:execute-silent('$self' --toggle {1})+reload('$self' --list)" \
     --bind="s:execute-silent('$self' --sort)+transform-header('$self' --header)+reload('$self' --list)" \
-    --bind="x,ctrl-x:execute-silent($is_session && tmux kill-session -t ={1})+reload('$self' --list)" \
+    --bind="x,ctrl-x:execute-silent($is_session && tmux kill-session -t {1})+reload('$self' --list)" \
     --bind="/:show-input+clear-query+enable-search+unbind($keys)" \
     --bind='q:abort' \
     --bind="esc:transform:[[ \$FZF_INPUT_STATE == hidden ]] && echo abort || echo \"$leave_input\"" \
     --bind="enter:transform:$is_session && echo accept" \
     ) || exit 0
 
-name="${pick%%$'\t'*}"
-[[ -z "$name" || "$name" == "$heading" ]] && exit 0
+id="${pick%%$'\t'*}"
+[[ -z "$id" || "$id" == "$heading" ]] && exit 0
 
 if [[ -n "${TMUX:-}" ]]; then
-    exec tmux switch-client -t "=$name"
+    exec tmux switch-client -t "$id"
 else
-    exec tmux attach-session -t "=$name"
+    exec tmux attach-session -t "$id"
 fi
