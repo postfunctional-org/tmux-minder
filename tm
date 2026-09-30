@@ -118,7 +118,7 @@ pick=$(list | fzf \
     --delimiter=$'\t' --with-nth=2.. --nth=1 \
     --no-input --prompt='search> ' \
     --header="$(header)" --header-first \
-    --layout=reverse --height=80% --border \
+    --layout=reverse --border \
     --preview="$is_session && tmux capture-pane -ep -t ={1}:" \
     --preview-window='right,55%' \
     --bind='j:down,k:up' \
