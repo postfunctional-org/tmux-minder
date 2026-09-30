@@ -108,9 +108,14 @@ self="$(readlink -f "$0")"
 # Shell test for the bindings: the focused row is a session, not the heading.
 is_session="[ -n {1} ] && [ {1} != '$heading' ]"
 keys='j,k,d,s,x,q,/'
+# Leaves search mode. The query stays but filters nothing, and the reload
+# shows the whole list again, which turning search off does not do.
+leave_input="hide-input+disable-search+rebind($keys)+reload('$self' --list)"
 
-# Letters are commands until / opens the search. Inside transform,
-# clear-query alone leaves the list filtered, hence search(). --track with
+# Letters are commands until / opens the search. Outside a search the input
+# is hidden and search is off, so an old query filters nothing, and / clears
+# it when a new search starts. Clearing it on the way out fails: fzf drops
+# clear-query when the same transform also runs hide-input. --track with
 # --id-nth=1 keeps the cursor on a session when d moves it to another section,
 # but it also makes fzf drop any action after reload, so reload goes last.
 # The bindings are bash, and --with-shell runs them with bash whatever $SHELL
@@ -118,7 +123,7 @@ keys='j,k,d,s,x,q,/'
 pick=$(list | fzf \
     --ansi --no-sort --track --id-nth=1 --with-shell='bash -c' \
     --delimiter=$'\t' --with-nth=2.. --nth=1 \
-    --no-input --prompt='search> ' \
+    --no-input --disabled --prompt='search> ' \
     --header="$(header)" --header-first \
     --layout=reverse --border \
     --preview="$is_session && tmux capture-pane -ep -t ={1}:" \
@@ -127,9 +132,9 @@ pick=$(list | fzf \
     --bind="d:execute-silent('$self' --toggle {1})+reload('$self' --list)" \
     --bind="s:execute-silent('$self' --sort)+transform-header('$self' --header)+reload('$self' --list)" \
     --bind="x,ctrl-x:execute-silent($is_session && tmux kill-session -t ={1})+reload('$self' --list)" \
-    --bind="/:show-input+unbind($keys)" \
+    --bind="/:show-input+clear-query+enable-search+unbind($keys)" \
     --bind='q:abort' \
-    --bind="esc:transform:[[ \$FZF_INPUT_STATE == hidden ]] && echo abort || echo 'clear-query+search()+hide-input+rebind($keys)'" \
+    --bind="esc:transform:[[ \$FZF_INPUT_STATE == hidden ]] && echo abort || echo \"$leave_input\"" \
     --bind="enter:transform:$is_session && echo accept" \
     ) || exit 0
 
