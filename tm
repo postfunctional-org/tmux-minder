@@ -113,8 +113,10 @@ keys='j,k,d,s,x,q,/'
 # clear-query alone leaves the list filtered, hence search(). --track with
 # --id-nth=1 keeps the cursor on a session when d moves it to another section,
 # but it also makes fzf drop any action after reload, so reload goes last.
+# The bindings are bash, and --with-shell runs them with bash whatever $SHELL
+# is.
 pick=$(list | fzf \
-    --ansi --no-sort --track --id-nth=1 \
+    --ansi --no-sort --track --id-nth=1 --with-shell='bash -c' \
     --delimiter=$'\t' --with-nth=2.. --nth=1 \
     --no-input --prompt='search> ' \
     --header="$(header)" --header-first \
