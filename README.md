@@ -26,7 +26,7 @@ t -d <name>               the same, and mark it as a daemon
 t -d <name> <command...>  start the command in a new daemon session
 ```
 
-Names may contain spaces, as in `t my project`. tmux does not allow `.` or `:` in a session name, and `t` replaces them with `_`. Inside tmux, `t` and `tm` switch the current client to the session instead of nesting one tmux inside another.
+Names may contain spaces, as in `t my project`. `t` replaces `.` and `:` with `_`, because tmux reads them in a target as window and pane separators. Inside tmux, `t` and `tm` switch the current client to the session instead of nesting one tmux inside another.
 
 Given a command, `t -d` types it into the new session's shell and returns without attaching. The shell stays open after the command exits. The output stays on screen, and the command is easy to run again.
 

@@ -22,7 +22,8 @@ else
     name="$*"
     cmd=""
 fi
-# tmux does not allow . or : in session names
+# A target reads . and : as window and pane separators, so a session name
+# with either in it cannot be targeted
 name="${name//[.:]/_}"
 
 if tmux has-session -t "=$name" 2>/dev/null; then
