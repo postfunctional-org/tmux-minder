@@ -2,8 +2,10 @@
 # tm: pick a tmux session from a list and attach to it.
 #
 #   enter     attach (or switch, if already inside tmux)
-#   ctrl-x    kill session
-#   esc       quit
+#   j/k       move
+#   x         kill session
+#   /         search (esc leaves search)
+#   q, esc    quit
 set -euo pipefail
 
 # One tab-separated row per session. awk and sort refer to these by number.
@@ -45,16 +47,23 @@ if ! tmux list-sessions &>/dev/null; then
 fi
 
 self="$(readlink -f "$0")"
+keys='j,k,x,q,/'
 
+# Letters are commands until / opens the search. Inside transform,
+# clear-query alone leaves the list filtered, hence search().
 pick=$(list | fzf \
     --ansi --no-sort \
     --delimiter=$'\t' --with-nth=2.. --nth=1 \
-    --prompt='search> ' \
-    --header='enter attach · ctrl-x kill · esc quit' --header-first \
+    --no-input --prompt='search> ' \
+    --header='enter attach · x kill · / search · q quit' --header-first \
     --layout=reverse --height=80% --border \
     --preview='tmux capture-pane -ep -t ={1}:' \
     --preview-window='right,55%' \
-    --bind="ctrl-x:execute-silent(tmux kill-session -t ={1})+reload('$self' --list)" \
+    --bind='j:down,k:up' \
+    --bind="x,ctrl-x:execute-silent(tmux kill-session -t ={1})+reload('$self' --list)" \
+    --bind="/:show-input+unbind($keys)" \
+    --bind='q:abort' \
+    --bind="esc:transform:[[ \$FZF_INPUT_STATE == hidden ]] && echo abort || echo 'clear-query+search()+hide-input+rebind($keys)'" \
     ) || exit 0
 
 name="${pick%%$'\t'*}"
