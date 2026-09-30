@@ -5,10 +5,14 @@
 #   enter     attach (or switch, if already inside tmux)
 #   j/k       move
 #   d         move session in/out of Daemons
+#   s         cycle sort: recent, name, created
 #   x         kill session
 #   /         search (esc leaves search)
 #   q, esc    quit
 set -euo pipefail
+
+sortfile="${XDG_CACHE_HOME:-$HOME/.cache}/tmux-minder/sort"
+sorts=(recent name created)
 
 # One tab-separated row per session. awk and sort refer to these by number.
 fields=(
@@ -21,6 +25,27 @@ fields=(
     '#{?@daemon,1,0}'           # 7
 )
 
+get_sort() {
+    local s
+    s="$(cat "$sortfile" 2>/dev/null || true)"
+    [[ " ${sorts[*]} " == *" $s "* ]] && echo "$s" || echo recent
+}
+
+cycle_sort() {
+    local cur i
+    cur="$(get_sort)"
+    for i in "${!sorts[@]}"; do
+        [[ "${sorts[i]}" == "$cur" ]] && break
+    done
+    mkdir -p "$(dirname "$sortfile")"
+    echo "${sorts[(i + 1) % ${#sorts[@]}]}" > "$sortfile"
+}
+
+header() {
+    printf 'sort: %s\n' "$(get_sort)"
+    printf 'enter attach · d daemon · s sort · x kill · / search · q quit'
+}
+
 # Id of the Daemons heading row. It must not be empty: --track never finds
 # an empty id after a reload, and fzf then stops taking keys. tmux does not
 # allow ':' in session names, so this id cannot match a real session.
@@ -29,8 +54,14 @@ heading=':daemons:'
 # Output: <id> TAB <padded name> TAB <details>. The id is the session name
 # the bindings target. fzf shows fields 2.. and only searches field 2.
 list() {
+    local key
+    case "$(get_sort)" in
+        name)    key='-k1,1f' ;;
+        created) key='-k3,3nr' ;;
+        *)       key='-k2,2nr' ;;
+    esac
     tmux list-sessions -F "$(IFS=$'\t'; echo "${fields[*]}")" 2>/dev/null |
-    sort -t$'\t' -k2,2nr |
+    sort -t$'\t' $key |
     awk -F'\t' -v now="$(date +%s)" -v heading="$heading" '
         function ago(t,  d) {
             d = now - t
@@ -63,6 +94,8 @@ toggle_daemon() {
 
 case "${1:-}" in
     --list)   list; exit ;;
+    --header) header; exit ;;
+    --sort)   cycle_sort; exit ;;
     --toggle) toggle_daemon "${2:-}"; exit ;;
 esac
 
@@ -74,21 +107,23 @@ fi
 self="$(readlink -f "$0")"
 # Shell test for the bindings: the focused row is a session, not the heading.
 is_session="[ -n {1} ] && [ {1} != '$heading' ]"
-keys='j,k,d,x,q,/'
+keys='j,k,d,s,x,q,/'
 
 # Letters are commands until / opens the search. Inside transform,
 # clear-query alone leaves the list filtered, hence search(). --track with
-# --id-nth=1 keeps the cursor on a session when d moves it to another section.
+# --id-nth=1 keeps the cursor on a session when d moves it to another section,
+# but it also makes fzf drop any action after reload, so reload goes last.
 pick=$(list | fzf \
     --ansi --no-sort --track --id-nth=1 \
     --delimiter=$'\t' --with-nth=2.. --nth=1 \
     --no-input --prompt='search> ' \
-    --header='enter attach · d daemon · x kill · / search · q quit' --header-first \
+    --header="$(header)" --header-first \
     --layout=reverse --height=80% --border \
     --preview="$is_session && tmux capture-pane -ep -t ={1}:" \
     --preview-window='right,55%' \
     --bind='j:down,k:up' \
     --bind="d:execute-silent('$self' --toggle {1})+reload('$self' --list)" \
+    --bind="s:execute-silent('$self' --sort)+transform-header('$self' --header)+reload('$self' --list)" \
     --bind="x,ctrl-x:execute-silent($is_session && tmux kill-session -t ={1})+reload('$self' --list)" \
     --bind="/:show-input+unbind($keys)" \
     --bind='q:abort' \
