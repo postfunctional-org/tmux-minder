@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # tm: pick a tmux session from a list and attach to it.
+# Sessions marked as daemons (t -d, or d here) are listed under "Daemons".
 #
 #   enter     attach (or switch, if already inside tmux)
 #   j/k       move
+#   d         move session in/out of Daemons
 #   x         kill session
 #   /         search (esc leaves search)
 #   q, esc    quit
@@ -16,14 +18,20 @@ fields=(
     '#{session_windows}'        # 4
     '#{session_attached}'       # 5
     '#{pane_current_command}'   # 6
+    '#{?@daemon,1,0}'           # 7
 )
 
-# Output: <raw name> TAB <padded name> TAB <details>. The raw name is what
+# Id of the Daemons heading row. It must not be empty: --track never finds
+# an empty id after a reload, and fzf then stops taking keys. tmux does not
+# allow ':' in session names, so this id cannot match a real session.
+heading=':daemons:'
+
+# Output: <id> TAB <padded name> TAB <details>. The id is the session name
 # the bindings target. fzf shows fields 2.. and only searches field 2.
 list() {
     tmux list-sessions -F "$(IFS=$'\t'; echo "${fields[*]}")" 2>/dev/null |
     sort -t$'\t' -k2,2nr |
-    awk -F'\t' -v now="$(date +%s)" '
+    awk -F'\t' -v now="$(date +%s)" -v heading="$heading" '
         function ago(t,  d) {
             d = now - t
             if (d < 60)    return d "s"
@@ -32,13 +40,30 @@ list() {
             return int(d / 86400) "d"
         }
         {
-            printf "%s\t%-24.24s\t%2dw  %-12.12s idle %-4s up %-4s %s\n",
-                $1, $1, $4, $6, ago($2), ago($3), ($5 > 0 ? "\033[32mattached\033[0m" : "")
+            line = sprintf("%s\t%-24.24s\t%2dw  %-12.12s idle %-4s up %-4s %s",
+                $1, $1, $4, $6, ago($2), ago($3), ($5 > 0 ? "\033[32mattached\033[0m" : ""))
+            if ($7) daemons[++nd] = line; else print line
+        }
+        END {
+            print heading "\t\033[33m── Daemons ──\033[0m\t"
+            for (i = 1; i <= nd; i++) print daemons[i]
         }'
+}
+
+# Option commands need the trailing colon in =name: here. A bare =name is
+# rejected with "no such session".
+toggle_daemon() {
+    [[ -z "$1" || "$1" == "$heading" ]] && return
+    if [[ -n "$(tmux show-options -t "=$1:" -qv @daemon)" ]]; then
+        tmux set-option -t "=$1:" -u @daemon
+    else
+        tmux set-option -t "=$1:" @daemon 1
+    fi
 }
 
 case "${1:-}" in
     --list)   list; exit ;;
+    --toggle) toggle_daemon "${2:-}"; exit ;;
 esac
 
 if ! tmux list-sessions &>/dev/null; then
@@ -47,27 +72,32 @@ if ! tmux list-sessions &>/dev/null; then
 fi
 
 self="$(readlink -f "$0")"
-keys='j,k,x,q,/'
+# Shell test for the bindings: the focused row is a session, not the heading.
+is_session="[ -n {1} ] && [ {1} != '$heading' ]"
+keys='j,k,d,x,q,/'
 
 # Letters are commands until / opens the search. Inside transform,
-# clear-query alone leaves the list filtered, hence search().
+# clear-query alone leaves the list filtered, hence search(). --track with
+# --id-nth=1 keeps the cursor on a session when d moves it to another section.
 pick=$(list | fzf \
-    --ansi --no-sort \
+    --ansi --no-sort --track --id-nth=1 \
     --delimiter=$'\t' --with-nth=2.. --nth=1 \
     --no-input --prompt='search> ' \
-    --header='enter attach · x kill · / search · q quit' --header-first \
+    --header='enter attach · d daemon · x kill · / search · q quit' --header-first \
     --layout=reverse --height=80% --border \
-    --preview='tmux capture-pane -ep -t ={1}:' \
+    --preview="$is_session && tmux capture-pane -ep -t ={1}:" \
     --preview-window='right,55%' \
     --bind='j:down,k:up' \
-    --bind="x,ctrl-x:execute-silent(tmux kill-session -t ={1})+reload('$self' --list)" \
+    --bind="d:execute-silent('$self' --toggle {1})+reload('$self' --list)" \
+    --bind="x,ctrl-x:execute-silent($is_session && tmux kill-session -t ={1})+reload('$self' --list)" \
     --bind="/:show-input+unbind($keys)" \
     --bind='q:abort' \
     --bind="esc:transform:[[ \$FZF_INPUT_STATE == hidden ]] && echo abort || echo 'clear-query+search()+hide-input+rebind($keys)'" \
+    --bind="enter:transform:$is_session && echo accept" \
     ) || exit 0
 
 name="${pick%%$'\t'*}"
-[[ -z "$name" ]] && exit 0
+[[ -z "$name" || "$name" == "$heading" ]] && exit 0
 
 if [[ -n "${TMUX:-}" ]]; then
     exec tmux switch-client -t "=$name"
