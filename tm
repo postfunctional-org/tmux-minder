@@ -5,6 +5,7 @@
 #   enter     attach (or switch, if already inside tmux)
 #   j/k       move
 #   d         move session in/out of Daemons
+#   r         rename session
 #   s         cycle sort: recent, name, created
 #   x         kill session
 #   /         search (esc leaves search)
@@ -44,7 +45,8 @@ cycle_sort() {
 
 header() {
     printf 'sort: %s\n' "$(get_sort)"
-    printf 'enter attach · d daemon · s sort · x kill · / search · q quit'
+    printf 'enter attach · / search · q quit\n'
+    printf 'd daemon · r rename · s sort · x kill'
 }
 
 # Id of the Daemons heading row. It must not be empty: --track never finds
@@ -93,11 +95,39 @@ toggle_daemon() {
     fi
 }
 
+self="$(readlink -f "$0")"
+keys='j,k,d,r,s,x,q,/'
+# Leaves search or rename mode. The query stays but filters nothing, and the
+# reload shows the whole list again, which turning search off does not do.
+leave_input="hide-input+disable-search+change-prompt(search> )+rebind($keys)+reload('$self' --list)"
+
+# r on a session: show the input with its current name filled in. Search
+# stays off, which keeps the list still while the new name is typed.
+start_rename() {
+    [[ -z "$1" || "$1" == "$heading" ]] && return
+    printf 'show-input+change-prompt(rename> )+unbind(%s)+change-query:%s\n' \
+        "$keys" "$(tmux display-message -p -t "$1" '#{session_name}')"
+}
+
+# enter in rename mode. . and : become _, as in t. An empty name cancels, and
+# a tmux error stays on screen in the prompt with rename mode still open.
+finish_rename() {
+    local new="${2//[.:]/_}" err
+    if [[ -n "$new" && "$1" != "$heading" ]] &&
+        ! err="$(tmux rename-session -t "$1" "$new" 2>&1)"; then
+        echo "change-prompt:rename ($err)> "
+    else
+        echo "$leave_input"
+    fi
+}
+
 case "${1:-}" in
-    --list)   list; exit ;;
-    --header) header; exit ;;
-    --sort)   cycle_sort; exit ;;
-    --toggle) toggle_daemon "${2:-}"; exit ;;
+    --list)      list; exit ;;
+    --header)    header; exit ;;
+    --sort)      cycle_sort; exit ;;
+    --toggle)    toggle_daemon "${2:-}"; exit ;;
+    --rename)    start_rename "${2:-}"; exit ;;
+    --rename-to) finish_rename "${2:-}" "${3:-}"; exit ;;
 esac
 
 if ! tmux list-sessions &>/dev/null; then
@@ -105,20 +135,17 @@ if ! tmux list-sessions &>/dev/null; then
     exit 1
 fi
 
-self="$(readlink -f "$0")"
 # Shell test for the bindings: the focused row is a session, not the heading.
 is_session="[ -n {1} ] && [ {1} != '$heading' ]"
-keys='j,k,d,s,x,q,/'
-# Leaves search mode. The query stays but filters nothing, and the reload
-# shows the whole list again, which turning search off does not do.
-leave_input="hide-input+disable-search+rebind($keys)+reload('$self' --list)"
 
-# Letters are commands until / opens the search. Outside a search the input
-# is hidden and search is off, so an old query filters nothing, and / clears
-# it when a new search starts. Clearing it on the way out fails: fzf drops
-# clear-query when the same transform also runs hide-input. --track with
-# --id-nth=1 keeps the cursor on a session when d moves it to another section,
-# but it also makes fzf drop any action after reload, so reload goes last.
+# Letters are commands until / opens the search or r opens a rename. The
+# input state tells the three modes apart: hidden, enabled for a search, and
+# disabled (search off) for a rename. Outside a search, search is off, so an
+# old query filters nothing, and / clears it when a new search starts.
+# Clearing it on the way out fails: fzf drops clear-query when the same
+# transform also runs hide-input. --track with --id-nth=1 keeps the cursor
+# on a session when d moves it or r renames it, but it also makes fzf drop
+# any action after reload, so reload goes last.
 # The bindings are bash, and --with-shell runs them with bash whatever $SHELL
 # is.
 pick=$(list | fzf \
@@ -133,10 +160,11 @@ pick=$(list | fzf \
     --bind="d:execute-silent('$self' --toggle {1})+reload('$self' --list)" \
     --bind="s:execute-silent('$self' --sort)+transform-header('$self' --header)+reload('$self' --list)" \
     --bind="x,ctrl-x:execute-silent($is_session && tmux kill-session -t {1})+reload('$self' --list)" \
+    --bind="r:transform:'$self' --rename {1}" \
     --bind="/:show-input+clear-query+enable-search+unbind($keys)" \
     --bind='q:abort' \
     --bind="esc:transform:[[ \$FZF_INPUT_STATE == hidden ]] && echo abort || echo \"$leave_input\"" \
-    --bind="enter:transform:$is_session && echo accept" \
+    --bind="enter:transform:if [[ \$FZF_INPUT_STATE == disabled ]]; then '$self' --rename-to {1} {q}; else $is_session && echo accept; fi" \
     ) || exit 0
 
 id="${pick%%$'\t'*}"

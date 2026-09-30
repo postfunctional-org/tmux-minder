@@ -40,13 +40,14 @@ If the session already exists, `t -d` marks it as a daemon and attaches to it. T
 
 Each row is one session. The columns are the window count, the program in the active pane, the idle time, and the uptime. A green `attached` marks a session that a client is using. The preview on the right is the session's current screen.
 
-Letters in `tm` are commands. Search is a separate mode that `/` opens.
+Letters in `tm` are commands. The input line opens only for a search with `/` or a rename with `r`. A rename starts from the current name. Enter applies it, and esc cancels.
 
 | key | action |
 |---|---|
 | enter | attach, or switch inside tmux |
 | j, k, arrows | move |
 | d | move the session in or out of Daemons |
+| r | rename the session |
 | s | cycle the sort: recent, name, created |
 | x, ctrl-x | kill the session |
 | / | search session names, esc to leave |
