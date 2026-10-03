@@ -5,6 +5,7 @@
 #   enter     attach (or switch, if already inside tmux)
 #   j/k       move
 #   d         move session in/out of Daemons
+#   n         new session (asks for a name, then goes into it)
 #   r         rename session
 #   s         cycle sort: recent, name, created
 #   x         kill session
@@ -46,7 +47,7 @@ cycle_sort() {
 header() {
     printf 'sort: %s\n' "$(get_sort)"
     printf 'enter attach · / search · q quit\n'
-    printf 'd daemon · r rename · s sort · x kill'
+    printf 'd daemon · n new · r rename · s sort · x kill'
 }
 
 # Id of the Daemons heading row. It must not be empty: --track never finds
@@ -96,7 +97,7 @@ toggle_daemon() {
 }
 
 self="$(readlink -f "$0")"
-keys='j,k,d,r,s,x,q,/'
+keys='j,k,d,n,r,s,x,q,/'
 # Leaves search or rename mode. The query stays but filters nothing, and the
 # reload shows the whole list again, which turning search off does not do.
 leave_input="hide-input+disable-search+change-prompt(search> )+rebind($keys)+reload('$self' --list)"
@@ -121,6 +122,21 @@ finish_rename() {
     fi
 }
 
+# enter in new-session mode: create the session, or reuse one with that name
+# as t does. print puts its id on fzf's first output line, where the attach
+# at the bottom picks it up. An empty name cancels.
+finish_new() {
+    local new="${1//[.:]/_}" id err
+    [[ -z "$new" ]] && { echo "$leave_input"; return; }
+    if ! tmux has-session -t "=$new" 2>/dev/null &&
+        ! err="$(tmux new-session -d -s "$new" 2>&1)"; then
+        echo "change-prompt:new ($err)> "
+        return
+    fi
+    id="$(tmux display-message -p -t "=$new:" '#{session_id}')"
+    echo "print($id)+accept"
+}
+
 case "${1:-}" in
     --list)      list; exit ;;
     --header)    header; exit ;;
@@ -128,6 +144,7 @@ case "${1:-}" in
     --toggle)    toggle_daemon "${2:-}"; exit ;;
     --rename)    start_rename "${2:-}"; exit ;;
     --rename-to) finish_rename "${2:-}" "${3:-}"; exit ;;
+    --new)       finish_new "${2:-}"; exit ;;
 esac
 
 if ! tmux list-sessions &>/dev/null; then
@@ -138,10 +155,11 @@ fi
 # Shell test for the bindings: the focused row is a session, not the heading.
 is_session="[ -n {1} ] && [ {1} != '$heading' ]"
 
-# Letters are commands until / opens the search or r opens a rename. The
-# input state tells the three modes apart: hidden, enabled for a search, and
-# disabled (search off) for a rename. Outside a search, search is off, so an
-# old query filters nothing, and / clears it when a new search starts.
+# Letters are commands until / opens the search, r a rename, or n a new
+# session. The input state tells the modes apart: hidden, enabled for a
+# search, and disabled (search off) for a rename or a new session, which the
+# prompt tells apart. Outside a search, search is off, so an old query
+# filters nothing, and / clears it when a new search starts.
 # Clearing it on the way out fails: fzf drops clear-query when the same
 # transform also runs hide-input. --track with --id-nth=1 keeps the cursor
 # on a session when d moves it or r renames it, but it also makes fzf drop
@@ -161,12 +179,14 @@ pick=$(list | fzf \
     --bind="s:execute-silent('$self' --sort)+transform-header('$self' --header)+reload('$self' --list)" \
     --bind="x,ctrl-x:execute-silent($is_session && tmux kill-session -t {1})+reload('$self' --list)" \
     --bind="r:transform:'$self' --rename {1}" \
+    --bind="n:show-input+clear-query+change-prompt(new> )+unbind($keys)" \
     --bind="/:show-input+clear-query+enable-search+unbind($keys)" \
     --bind='q:abort' \
     --bind="esc:transform:[[ \$FZF_INPUT_STATE == hidden ]] && echo abort || echo \"$leave_input\"" \
-    --bind="enter:transform:if [[ \$FZF_INPUT_STATE == disabled ]]; then '$self' --rename-to {1} {q}; else $is_session && echo accept; fi" \
+    --bind="enter:transform:if [[ \$FZF_INPUT_STATE == disabled ]]; then if [[ \$FZF_PROMPT == new* ]]; then '$self' --new {q}; else '$self' --rename-to {1} {q}; fi; else $is_session && echo accept; fi" \
     ) || exit 0
 
+pick="${pick%%$'\n'*}"
 id="${pick%%$'\t'*}"
 [[ -z "$id" || "$id" == "$heading" ]] && exit 0
 
