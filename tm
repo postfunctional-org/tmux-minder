@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# tm: pick a tmux session from a list and attach to it.
+# tm: pick a tmux session from a list and attach to it. Detaching, or the
+# session ending, comes back to the list.
 # Sessions marked as daemons (t -d, or d here) are listed under "Daemons".
 #
 #   enter     attach (or switch, if already inside tmux)
@@ -66,7 +67,10 @@ list() {
         created) key='-k3,3nr' ;;
         *)       key='-k2,2nr' ;;
     esac
-    tmux list-sessions -F "$(IFS=$'\t'; echo "${fields[*]}")" 2>/dev/null |
+    # With no server running, list-sessions fails and the list is just the
+    # Daemons heading. Under pipefail its status would also fail the pipe into
+    # fzf, and tm would quit instead of attaching to a session made with n.
+    { tmux list-sessions -F "$(IFS=$'\t'; echo "${fields[*]}")" 2>/dev/null || true; } |
     sort -t$'\t' $key |
     awk -F'\t' -v now="$(date +%s)" -v heading="$heading" '
         function ago(t,  d) {
@@ -147,11 +151,6 @@ case "${1:-}" in
     --new)       finish_new "${2:-}"; exit ;;
 esac
 
-if ! tmux list-sessions &>/dev/null; then
-    echo "no tmux sessions" >&2
-    exit 1
-fi
-
 # Shell test for the bindings: the focused row is a session, not the heading.
 is_session="[ -n {1} ] && [ {1} != '$heading' ]"
 
@@ -166,32 +165,46 @@ is_session="[ -n {1} ] && [ {1} != '$heading' ]"
 # any action after reload, so reload goes last.
 # The bindings are bash, and --with-shell runs them with bash whatever $SHELL
 # is.
-pick=$(list | fzf \
-    --ansi --no-sort --track --id-nth=1 --with-shell='bash -c' \
-    --delimiter=$'\t' --with-nth=2.. --nth=1 \
-    --no-input --disabled --prompt='search> ' \
-    --header="$(header)" --header-first \
-    --layout=reverse --border \
-    --preview="$is_session && tmux capture-pane -ep -t {1}" \
-    --preview-window='right,55%' \
-    --bind='j:down,k:up' \
-    --bind="d:execute-silent('$self' --toggle {1})+reload('$self' --list)" \
-    --bind="s:execute-silent('$self' --sort)+transform-header('$self' --header)+reload('$self' --list)" \
-    --bind="x,ctrl-x:execute-silent($is_session && tmux kill-session -t {1})+reload('$self' --list)" \
-    --bind="r:transform:'$self' --rename {1}" \
-    --bind="n:show-input+clear-query+change-prompt(new> )+unbind($keys)" \
-    --bind="/:show-input+clear-query+enable-search+unbind($keys)" \
-    --bind='q:abort' \
-    --bind="esc:transform:[[ \$FZF_INPUT_STATE == hidden ]] && echo abort || echo \"$leave_input\"" \
-    --bind="enter:transform:if [[ \$FZF_INPUT_STATE == disabled ]]; then if [[ \$FZF_PROMPT == new* ]]; then '$self' --new {q}; else '$self' --rename-to {1} {q}; fi; else $is_session && echo accept; fi" \
-    ) || exit 0
+#
+# Outside tmux, the list comes back when the client detaches or its session
+# ends, with the cursor on the session just left, until q or esc. Inside
+# tmux, the switch ends tm. pos(n) on load places that cursor, and unbind
+# stops later reloads from moving it back.
+last=''
+while :; do
+    rows="$(list)"
+    at="$(awk -F'\t' -v id="$last" '$1 == id { print NR; exit }' <<< "$rows")"
+    start=()
+    [[ -n "$at" ]] && start=(--bind="load:pos($at)+unbind(load)")
 
-pick="${pick%%$'\n'*}"
-id="${pick%%$'\t'*}"
-[[ -z "$id" || "$id" == "$heading" ]] && exit 0
+    pick=$(printf '%s\n' "$rows" | fzf \
+        --ansi --no-sort --track --id-nth=1 --with-shell='bash -c' \
+        --delimiter=$'\t' --with-nth=2.. --nth=1 \
+        --no-input --disabled --prompt='search> ' \
+        --header="$(header)" --header-first \
+        --layout=reverse --border \
+        --preview="$is_session && tmux capture-pane -ep -t {1}" \
+        --preview-window='right,55%' \
+        --bind='j:down,k:up' \
+        --bind="d:execute-silent('$self' --toggle {1})+reload('$self' --list)" \
+        --bind="s:execute-silent('$self' --sort)+transform-header('$self' --header)+reload('$self' --list)" \
+        --bind="x,ctrl-x:execute-silent($is_session && tmux kill-session -t {1})+reload('$self' --list)" \
+        --bind="r:transform:'$self' --rename {1}" \
+        --bind="n:show-input+clear-query+change-prompt(new> )+unbind($keys)" \
+        --bind="/:show-input+clear-query+enable-search+unbind($keys)" \
+        --bind='q:abort' \
+        --bind="esc:transform:[[ \$FZF_INPUT_STATE == hidden ]] && echo abort || echo \"$leave_input\"" \
+        --bind="enter:transform:if [[ \$FZF_INPUT_STATE == disabled ]]; then if [[ \$FZF_PROMPT == new* ]]; then '$self' --new {q}; else '$self' --rename-to {1} {q}; fi; else $is_session && echo accept; fi" \
+        "${start[@]}" \
+        ) || exit 0
 
-if [[ -n "${TMUX:-}" ]]; then
-    exec tmux switch-client -t "$id"
-else
-    exec tmux attach-session -t "$id"
-fi
+    pick="${pick%%$'\n'*}"
+    id="${pick%%$'\t'*}"
+    [[ -z "$id" || "$id" == "$heading" ]] && exit 0
+
+    if [[ -n "${TMUX:-}" ]]; then
+        exec tmux switch-client -t "$id"
+    fi
+    tmux attach-session -t "$id" || true
+    last="$id"
+done

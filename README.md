@@ -40,6 +40,8 @@ If the session already exists, `t -d` marks it as a daemon and attaches to it. T
 
 Each row is one session. The columns are the window count, the program in the active pane, the idle time, and the uptime. A green `attached` marks a session that a client is using. The preview on the right is the session's current screen.
 
+`tm` opens even when no sessions exist, with an empty list, and `n` starts the first one. Outside tmux, `tm` stays open behind the session you attach to. When you detach or the session ends, the list comes back with the cursor on that session. `q` or esc quits. Inside tmux, `tm` switches the client and exits.
+
 Letters in `tm` are commands. The input line opens only for a search with `/`, a rename with `r`, or a new session with `n`. A rename starts from the current name. Enter applies it, and esc cancels.
 
 | key | action |
